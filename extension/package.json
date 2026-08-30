@@ -1,0 +1,58 @@
+{
+    "name": "laravel-blade-and-route-search",
+    "displayName": "Laravel Blade & Route Search",
+    "description": "Convert blade path to dot notation and search routes in sidebar",
+    "version": "1.4.0",
+    "publisher": "local",
+    "engines": {
+        "vscode": "^1.74.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onCommand:laravelBlade.searchView",
+        "onCommand:laravelBlade.lrsearch",
+        "onView:laravelBlade.routeSearchView"
+    ],
+    "main": "./extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "laravelBlade.searchView",
+                "title": "Laravel: Search Blade View in Controllers"
+            },
+            {
+                "command": "laravelBlade.lrsearch",
+                "title": "lrsearch: Open Laravel Route Search"
+            }
+        ],
+        "keybindings": [
+            {
+                "command": "laravelBlade.searchView",
+                "key": "ctrl+shift+q",
+                "mac": "cmd+shift+q"
+            }
+        ],
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "laravelSearch",
+                    "title": "Laravel Search",
+                    "icon": "icon.svg"
+                }
+            ]
+        },
+        "views": {
+            "laravelSearch": [
+                {
+                    "type": "webview",
+                    "id": "laravelBlade.routeSearchView",
+                    "name": "Route Search",
+                    "contextualTitle": "Laravel Route Search",
+                    "icon": "icon.svg"
+                }
+            ]
+        }
+    }
+}
