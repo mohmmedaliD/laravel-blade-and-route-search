@@ -3,7 +3,12 @@
     "displayName": "Laravel Blade & Route Search",
     "description": "Convert blade path to dot notation and search routes in sidebar",
     "version": "1.4.0",
-    "publisher": "local",
+    "publisher": "Mohamedalidesouky",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/mohmmedaliD/laravel-blade-and-route-search"
+    },
+    "icon": "icon.png",
     "engines": {
         "vscode": "^1.74.0"
     },
