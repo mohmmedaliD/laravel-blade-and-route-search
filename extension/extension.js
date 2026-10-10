@@ -16,19 +16,22 @@ class RouteSearchProvider {
             enableScripts: true,
             localResourceRoots: [this._extensionUri]
         };
-        webviewView.webview.html = this._getHtml();
 
+        // Register the message listener BEFORE setting the HTML: the webview
+        // script posts 'loadRoutes' as soon as it runs, and if the listener
+        // isn't registered yet that message is lost and the view stays loading.
         webviewView.webview.onDidReceiveMessage(async (message) => {
             if (message.type === 'loadRoutes') {
                 await this._loadRoutes();
                 this._sendRoutes(this._routes);
             }
             else if (message.type === 'search') {
-                // ⬅️ Spinner أثناء البحث
-                this._view.webview.postMessage({ type: 'loading', message: 'جاري البحث...' });
+                // ⬅️ Spinner while searching
+                this._view.webview.postMessage({ type: 'loading', message: 'Searching...' });
+                const autoOpen = message.autoOpen;
                 setTimeout(() => {
                     const filtered = this._filterRoutes(message.value);
-                    this._sendRoutes(filtered);
+                    this._sendRoutes(filtered, autoOpen);
                 }, 50);
             }
             else if (message.type === 'open') {
@@ -40,8 +43,10 @@ class RouteSearchProvider {
                 
                 if (actionStr.includes('ApiPlatform')) {
                     await openApiPlatformRoute(route, workspaceFolder.uri.fsPath);
+                } else if (actionStr.includes('Filament')) {
+                    await openFilamentRoute(route, workspaceFolder.uri.fsPath);
                 } else if (isClosure) {
-                    vscode.window.showInformationMessage('⚠️ هذا Route يستخدم Closure');
+                    vscode.window.showInformationMessage('⚠️ This route uses a Closure');
                 } else {
                     openRouteController(route, workspaceFolder.uri.fsPath);
                 }
@@ -54,11 +59,14 @@ class RouteSearchProvider {
                 this._sendRoutes(this._routes || []);
             }
         });
+
+        webviewView.webview.html = this._getHtml();
+        if (this._routes) this._sendRoutes(this._routes);
     }
 
-    _sendRoutes(routes) {
+    _sendRoutes(routes, autoOpen) {
         if (this._view) {
-            this._view.webview.postMessage({ type: 'routes', routes: routes || [] });
+            this._view.webview.postMessage({ type: 'routes', routes: routes || [], autoOpen: !!autoOpen });
         }
     }
 
@@ -67,19 +75,32 @@ class RouteSearchProvider {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) { this._routes = []; return; }
         
-        this._view.webview.postMessage({ type: 'loading', message: 'جاري تحميل الـ Routes...' });
+        this._view.webview.postMessage({ type: 'loading', message: 'Loading routes...' });
         
         return new Promise((resolve) => {
             exec('php artisan route:list --json', {
                 cwd: workspaceFolder.uri.fsPath,
                 maxBuffer: 1024 * 1024 * 5,
                 timeout: 30000
-            }, (error, stdout) => {
-                if (error) { this._routes = []; resolve(); return; }
+            }, (error, stdout, stderr) => {
+                if (error) {
+                    this._routes = [];
+                    this._view.webview.postMessage({
+                        type: 'error',
+                        message: 'Failed to run "php artisan route:list": ' + ((stderr || '').trim() || error.message)
+                    });
+                    resolve(); return;
+                }
                 try {
                     this._routes = JSON.parse(stdout);
                     if (!Array.isArray(this._routes)) this._routes = [];
-                } catch (e) { this._routes = []; }
+                } catch (e) {
+                    this._routes = [];
+                    this._view.webview.postMessage({
+                        type: 'error',
+                        message: 'Failed to parse route:list output (invalid JSON)'
+                    });
+                }
                 resolve();
             });
         });
@@ -89,7 +110,7 @@ class RouteSearchProvider {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) return;
 
-        this._view.webview.postMessage({ type: 'loading', message: 'جاري مسح الـ Routes...' });
+        this._view.webview.postMessage({ type: 'loading', message: 'Clearing routes...' });
 
         await new Promise((resolve) => {
             exec('php artisan route:clear', {
@@ -98,7 +119,7 @@ class RouteSearchProvider {
             }, () => resolve());
         });
 
-        this._view.webview.postMessage({ type: 'loading', message: 'جاري إعادة تحميل الـ Routes...' });
+        this._view.webview.postMessage({ type: 'loading', message: 'Reloading routes...' });
 
         this._routes = null;
         await this._loadRoutes();
@@ -108,8 +129,10 @@ class RouteSearchProvider {
     _filterRoutes(searchValue) {
         if (!this._routes) return [];
         if (!searchValue.trim()) return this._routes;
-        
-        const searchParts = searchValue.trim().split('/').filter(p => p);
+
+        let normalized = normalizeUrlToPath(searchValue);
+
+        const searchParts = normalized.split('/').filter(p => p);
         if (searchParts.length === 0) return this._routes;
         
         return this._routes.map(route => {
@@ -123,7 +146,7 @@ class RouteSearchProvider {
 
     _getHtml() {
         return `<!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <style>
@@ -132,18 +155,22 @@ class RouteSearchProvider {
         
         .toolbar { display: flex; gap: 6px; margin-bottom: 8px; }
         .toolbar button {
-            flex: 1;
-            padding: 6px 8px;
+            flex: 0 0 auto;
+            width: 28px;
+            height: 28px;
+            padding: 5px;
             border: none;
             border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
             cursor: pointer;
             transition: opacity 0.15s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
         }
+        .toolbar button svg { width: 100%; height: 100%; }
         .toolbar button:hover { opacity: 0.85; }
-        .btn-refresh { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-        .btn-reset   { background: var(--vscode-button-secondaryBackground, #6c757d); color: var(--vscode-button-secondaryForeground, #fff); }
+        .btn-refresh { background: var(--vscode-button-background); }
+        .btn-reset   { background: var(--vscode-button-secondaryBackground, #6c757d); }
         
         #search { width: 100%; padding: 8px 10px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; font-size: 13px; outline: none; }
         #search:focus { border-color: var(--vscode-focusBorder); }
@@ -181,15 +208,22 @@ class RouteSearchProvider {
 </head>
 <body>
     <div class="toolbar">
-        <button class="btn-refresh" id="btnRefresh">🔄 تحديث</button>
-        <button class="btn-reset" id="btnReset">↩️ إعادة ضبط</button>
+        <div style="flex: 2;">
+            Laravel Route Search
+        </div>
+        <button class="btn-refresh" id="btnRefresh" title="Update">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8.1 8.1 0 0 0 4.5 9M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/></svg>
+        </button>
+        <button class="btn-reset" id="btnReset" title="Reset">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/></svg>
+        </button>
     </div>
-    <input type="text" id="search" placeholder="اكتب URI للبحث..." autocomplete="off" />
+    <input type="text" id="search" placeholder="Type URI to search..." autocomplete="off" />
     <div id="count"></div>
     <div id="results">
         <div class="loading-container">
             <div class="spinner"></div>
-            <div>جاري تحميل الـ Routes...</div>
+            <div>Loading routes...</div>
         </div>
     </div>
 
@@ -199,10 +233,18 @@ class RouteSearchProvider {
         const resultsDiv = document.getElementById('results');
         const countDiv = document.getElementById('count');
         let selectedIndex = -1;
+        let routesLoaded = false;
         
         vscode.postMessage({ type: 'loadRoutes' });
         
+        // If the initial 'loadRoutes' message was lost, retry once.
+        setTimeout(() => {
+            if (!routesLoaded) vscode.postMessage({ type: 'loadRoutes' });
+        }, 2000);
+        
         document.getElementById('btnRefresh').addEventListener('click', () => {
+            searchInput.value = '';
+            selectedIndex = -1;
             vscode.postMessage({ type: 'refresh' });
         });
         
@@ -215,23 +257,67 @@ class RouteSearchProvider {
         window.addEventListener('message', event => {
             const msg = event.data;
             if (msg.type === 'routes') {
+                routesLoaded = true;
                 renderResults(msg.routes);
+                if (msg.autoOpen && msg.routes.length > 0) {
+                    const first = resultsDiv.querySelector('.route-item');
+                    if (first) first.click();
+                }
+            }
+            else if (msg.type === 'setSearch') {
+                searchInput.value = msg.value;
+                selectedIndex = -1;
+                if (!msg.value.trim()) {
+                    vscode.postMessage({ type: 'reset' });
+                } else if (msg.autoOpen) {
+                    waitForRoutesThenSearch(msg.value);
+                } else {
+                    vscode.postMessage({ type: 'search', value: msg.value });
+                }
             }
             else if (msg.type === 'loading') {
                 resultsDiv.innerHTML = '<div class="loading-container"><div class="spinner"></div><div>' + escapeHtml(msg.message) + '</div></div>';
+                countDiv.textContent = '';
+            }
+            else if (msg.type === 'error') {
+                routesLoaded = true;
+                resultsDiv.innerHTML = '<div class="empty">❌ ' + escapeHtml(msg.message) + '</div>';
                 countDiv.textContent = '';
             }
         });
         
         searchInput.addEventListener('input', (e) => {
             selectedIndex = -1;
-            const value = e.target.value;
+            let value = extractPath(e.target.value);
+            if (value !== e.target.value) {
+                searchInput.value = value;
+            }
             if (!value.trim()) {
                 vscode.postMessage({ type: 'reset' });
                 return;
             }
             vscode.postMessage({ type: 'search', value: value });
         });
+
+        function waitForRoutesThenSearch(value) {
+            if (routesLoaded) {
+                vscode.postMessage({ type: 'search', value: value, autoOpen: true });
+                return;
+            }
+            setTimeout(() => waitForRoutesThenSearch(value), 100);
+        }
+        
+        function extractPath(value) {
+            let v = value.trim();
+            if (/^https?:\\/\\//i.test(v)) {
+                v = v.replace(/^https?:\\/\\/[^\\/\\s]+/i, '');
+            } else if (/^[a-z0-9.-]+:\\d+[\\/\\s]?/i.test(v)) {
+                v = v.replace(/^[a-z0-9.-]+:\\d+/i, '');
+            } else if (/^[a-z0-9-]+(\\.[a-z0-9-]+)+(\\/|$)/i.test(v)) {
+                v = v.replace(/^[a-z0-9-]+(\\.[a-z0-9-]+)+/i, '');
+            }
+            return v.replace(/^\\//, '');
+        }
         
         searchInput.addEventListener('keydown', (e) => {
             const items = resultsDiv.querySelectorAll('.route-item');
@@ -259,8 +345,8 @@ class RouteSearchProvider {
         
         function renderResults(routes) {
             resultsDiv.innerHTML = '';
-            countDiv.textContent = routes.length + ' نتيجة';
-            if (routes.length === 0) { resultsDiv.innerHTML = '<div class="empty">لا توجد نتائج مطابقة</div>'; return; }
+            countDiv.textContent = routes.length + ' results';
+            if (routes.length === 0) { resultsDiv.innerHTML = '<div class="empty">No matching results</div>'; return; }
             
             routes.forEach((route, index) => {
                 const div = document.createElement('div');
@@ -291,26 +377,68 @@ function activate(context) {
 
     let bladeDisposable = vscode.commands.registerCommand('laravelBlade.searchView', async function () {
         const editor = vscode.window.activeTextEditor;
-        if (!editor) { vscode.window.showWarningMessage('افتح ملف Blade أولاً'); return; }
+        if (!editor) { vscode.window.showWarningMessage('Open a Blade file first'); return; }
         const filePath = editor.document.fileName;
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
-        if (!workspaceFolder) { vscode.window.showWarningMessage('الملف ليس ضمن Workspace'); return; }
+        if (!workspaceFolder) { vscode.window.showWarningMessage('File is not in a workspace'); return; }
         const relativePath = path.relative(workspaceFolder.uri.fsPath, filePath);
         const viewsMatch = relativePath.match(/^resources[\\\/]views[\\\/](.+)\.blade\.php$/i);
-        if (!viewsMatch) { vscode.window.showWarningMessage('هذا ليس ملف Blade داخل resources/views'); return; }
+        if (!viewsMatch) { vscode.window.showWarningMessage('Not a Blade file inside resources/views'); return; }
         let viewPath = viewsMatch[1].replace(/[\\\/]/g, '.');
         await vscode.commands.executeCommand('workbench.action.findInFiles', {
             query: viewPath, filesToInclude: 'app/**/*.php', filesToExclude: '',
             triggerSearch: true, matchWholeWord: false, isRegex: false
         });
-        vscode.window.showInformationMessage('🔍 تم البحث عن: "' + viewPath + '" في app/**/*.php');
+        vscode.window.showInformationMessage('🔍 Searched for: "' + viewPath + '" in app/**/*.php');
     });
 
     let lrsearchDisposable = vscode.commands.registerCommand('laravelBlade.lrsearch', async function () {
         await vscode.commands.executeCommand('laravelBlade.routeSearchView.focus');
     });
 
-    context.subscriptions.push(bladeDisposable, lrsearchDisposable);
+    let lrsearchUrlDisposable = vscode.commands.registerCommand('laravelBlade.lrsearchUrl', async function (url, autoOpen) {
+        if (typeof url !== 'string' || !url.trim()) {
+            url = await vscode.window.showInputBox({
+                prompt: 'Paste the full URL (e.g. http://localhost:8000/admin/users)',
+                placeHolder: 'http://localhost:8000/admin/users',
+                ignoreFocusOut: true
+            });
+        }
+        if (!url || !url.trim()) return;
+
+        const pathValue = normalizeUrlToPath(url);
+
+        await vscode.commands.executeCommand('laravelBlade.routeSearchView.focus');
+        for (let i = 0; i < 50 && !provider._view; i++) {
+            await new Promise(r => setTimeout(r, 100));
+        }
+        if (provider._view) {
+            provider._view.webview.postMessage({ type: 'setSearch', value: pathValue, autoOpen: !!autoOpen });
+        }
+    });
+
+    let uriDisposable = vscode.window.registerUriHandler({
+        handleUri(uri) {
+            if (uri.path === '/searchByUrl') {
+                const url = new URLSearchParams(uri.query).get('url');
+                if (url) vscode.commands.executeCommand('laravelBlade.lrsearchUrl', url, true);
+            }
+        }
+    });
+
+    context.subscriptions.push(bladeDisposable, lrsearchDisposable, lrsearchUrlDisposable, uriDisposable);
+}
+
+function normalizeUrlToPath(value) {
+    let v = (value || '').trim();
+    if (/^https?:\/\//i.test(v)) {
+        v = v.replace(/^https?:\/\/[^\/\s]+/i, '');
+    } else if (/^[a-z0-9.-]+:\d+[\/\s]?/i.test(v)) {
+        v = v.replace(/^[a-z0-9.-]+:\d+/i, '');
+    } else if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(\/|$)/i.test(v)) {
+        v = v.replace(/^[a-z0-9-]+(\.[a-z0-9-]+)+/i, '');
+    }
+    return v.replace(/^\//, '');
 }
 
 function calculateSegmentScore(searchParts, routeParts) {
@@ -370,7 +498,7 @@ function routePartMatches(routePart, searchPart) {
 async function openRouteController(route, projectPath) {
     var action = route.action;
     if (!action || typeof action !== 'string' || !action.includes('@')) {
-        vscode.window.showWarningMessage('لا يوجد Controller لهذا الـ Route'); return;
+        vscode.window.showWarningMessage('No controller for this route'); return;
     }
     var atIndex = action.lastIndexOf('@');
     var controllerFull = action.substring(0, atIndex);
@@ -392,7 +520,7 @@ async function openRouteController(route, projectPath) {
         if (fs.existsSync(possiblePaths[i])) { controllerPath = possiblePaths[i]; break; }
     }
     if (!controllerPath) {
-        vscode.window.showWarningMessage('❌ لم يتم العثور على الـ Controller: ' + controllerFull); return;
+        vscode.window.showWarningMessage('❌ Controller not found: ' + controllerFull); return;
     }
     try {
         var doc = await vscode.workspace.openTextDocument(controllerPath);
@@ -410,7 +538,64 @@ async function openRouteController(route, projectPath) {
             editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
         }
     } catch (err) {
-        vscode.window.showErrorMessage('خطأ في فتح الـ Controller: ' + err.message);
+        vscode.window.showErrorMessage('Error opening controller: ' + err.message);
+    }
+}
+
+async function openFilamentRoute(route, projectPath) {
+    var action = route.action;
+    if (!action || typeof action !== 'string') {
+        vscode.window.showWarningMessage('No action for this route'); return;
+    }
+
+    var atIndex = action.lastIndexOf('@');
+    var controllerFull = atIndex !== -1 ? action.substring(0, atIndex) : action;
+    var method = atIndex !== -1 ? action.substring(atIndex + 1) : null;
+    var cleanController = controllerFull;
+    if (cleanController.startsWith('\\')) cleanController = cleanController.substring(1);
+    var relativeClassPath = cleanController.replace(/\\/g, '/') + '.php';
+
+    var possiblePaths = [
+        path.join(projectPath, relativeClassPath),
+        path.join(projectPath, 'app', relativeClassPath),
+    ];
+    if (cleanController.startsWith('App\\') || cleanController.startsWith('App/')) {
+        var withoutApp = cleanController.substring(4).replace(/\\/g, '/') + '.php';
+        possiblePaths.push(path.join(projectPath, 'app', withoutApp));
+    }
+    if (cleanController.startsWith('Filament\\') || cleanController.startsWith('Filament/')) {
+        var withoutFilament = cleanController.substring(9).replace(/\\/g, '/') + '.php';
+        possiblePaths.push(path.join(projectPath, 'vendor', 'filament', 'filament', 'src', withoutFilament));
+        possiblePaths.push(path.join(projectPath, 'vendor', 'filament', 'support', 'src', withoutFilament));
+    }
+
+    var targetPath = null;
+    for (var i = 0; i < possiblePaths.length; i++) {
+        if (fs.existsSync(possiblePaths[i])) { targetPath = possiblePaths[i]; break; }
+    }
+    if (!targetPath) {
+        vscode.window.showWarningMessage('❌ Filament file not found: ' + controllerFull); return;
+    }
+
+    try {
+        var doc = await vscode.workspace.openTextDocument(targetPath);
+        var editor = await vscode.window.showTextDocument(doc);
+        if (method) {
+            var text = doc.getText();
+            var lines = text.split('\n');
+            var methodPattern = new RegExp('(?:public\\s+|protected\\s+|private\\s+)?function\\s+' + method + '\\s*\\(');
+            var lineIndex = -1;
+            for (var l = 0; l < lines.length; l++) {
+                if (methodPattern.test(lines[l])) { lineIndex = l; break; }
+            }
+            if (lineIndex !== -1) {
+                var position = new vscode.Position(lineIndex, 0);
+                editor.selection = new vscode.Selection(position, position);
+                editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+            }
+        }
+    } catch (err) {
+        vscode.window.showErrorMessage('Error opening Filament file: ' + err.message);
     }
 }
 
@@ -492,7 +677,7 @@ async function openApiPlatformRoute(route, projectPath) {
     }
     
     if (!foundFile) {
-        vscode.window.showWarningMessage('❌ لم يتم العثور على ApiPlatform Route: ' + uri);
+        vscode.window.showWarningMessage('❌ ApiPlatform route not found: ' + uri);
         return;
     }
     
@@ -506,7 +691,7 @@ async function openApiPlatformRoute(route, projectPath) {
             vscode.TextEditorRevealType.InCenter
         );
     } catch (err) {
-        vscode.window.showErrorMessage('خطأ في فتح الملف: ' + err.message);
+        vscode.window.showErrorMessage('Error opening file: ' + err.message);
     }
 }
 

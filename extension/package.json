@@ -16,8 +16,10 @@
         "Other"
     ],
     "activationEvents": [
+        "onUri",
         "onCommand:laravelBlade.searchView",
         "onCommand:laravelBlade.lrsearch",
+        "onCommand:laravelBlade.lrsearchUrl",
         "onView:laravelBlade.routeSearchView"
     ],
     "main": "./extension.js",
@@ -30,6 +32,10 @@
             {
                 "command": "laravelBlade.lrsearch",
                 "title": "lrsearch: Open Laravel Route Search"
+            },
+            {
+                "command": "laravelBlade.lrsearchUrl",
+                "title": "lrsearch: Search Route by URL"
             }
         ],
         "keybindings": [
